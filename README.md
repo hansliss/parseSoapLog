@@ -14,5 +14,9 @@ organized by client {IP,port} anyway, so it's a pretty safe assumption for this 
 
 Here's an example call, so you can see what the XPath and namespace parameters look like:
 ```bash
-parseSoapLog -g "/s:Envelope/s:Body/*/ns0:request/ns3:MessageId" -n "s=http://schemas.xmlsoap.org/soap/envelope/ ns0=http://www.systemhuset.com/iec/v1 ns3=http://www.systemhuset.com/iec/data/v1" trace_20200916_192.168.4.10_12345
+parseSoapLog -g "/s:Envelope/s:Body/*/ns0:request/ns3:MessageId" -n "s=http://schemas.xmlsoap.org/soap/envelope/ ns0=http://www.systemhuset.com/iec/v1 ns3=http://www.systemhuset.com/iec/data/v1" -o event -t foo trace_20200916_192.168.4.10_12345
 ```
+
+This will save individual "events" (grouped by the MessageId value found through XPath expression) in files prefixed by "event", using "foo" as a temp file.
+The temp file isn't removed by the program once it's done.
+
