@@ -20,6 +20,7 @@ typedef struct linelist_s {
   struct linelist_s *next;
 } *linelist;
 
+// Add a line, containing a duplicate of the given string
 void addline(linelist *l, char *line) {
   linelist *tmp = l;
   while (*tmp) {
@@ -41,6 +42,7 @@ void freelinelist(linelist *l) {
   }
 }
 
+// Split into lines. Modifies buf and adds lines to the linelist
 void splitlines(char *buf, linelist *l) {
   // fprintf(stderr, "Splitting buffer\n");
   char *p1=buf;
@@ -72,6 +74,7 @@ typedef struct message_s {
   linelist lines;
 } *message;
 
+// Returns a copy of a header value
 char *findheader(linelist l, char *header) {
   char *searchString = (char *)malloc(strlen(header) + 3);
   strcpy(searchString, header);
@@ -88,6 +91,7 @@ char *findheader(linelist l, char *header) {
   }
 }
 
+// Return a newly allocated string containing response status
 char *findstatus(linelist l) {
   char *s = (char *)malloc(BUFSIZE);
   if (!strncmp(l->line, "HTTP/1.1 ", 9)) {
@@ -98,6 +102,7 @@ char *findstatus(linelist l) {
   return NULL;
 }
 
+// Return a newly allocated copy of the body
 char *extractbody(linelist l) {
   char *body=NULL;
   while (l && strlen(l->line) > 0) {
@@ -130,6 +135,7 @@ void usage(char *progname)
   fprintf(stderr, "Usage: %s -g <group by (xpath)> -n \"<nsprefix:namespace ...>\" -o <outfile prefix> -t <tmp file> <file> ...\n", progname);
 }
 
+// Return a newly allocated message, read from the infile
 message readonemessage(FILE *infile) {
   static char inbuf[BUFSIZE];
   int l;
@@ -259,6 +265,12 @@ void printLogEntry(char *groupBy, char *nslist, char *outfilename, char *tmpfile
 	  xmlFree(value);
 	}
       }
+      if (result) {
+	xmlXPathFreeObject(result);
+      }
+      if (context) {
+	xmlXPathFreeContext(context);
+      }
     }
   }
   if (currentTransactionId && (!lastTransactionId || strcmp(lastTransactionId, currentTransactionId))) {
@@ -297,7 +309,7 @@ void printLogEntry(char *groupBy, char *nslist, char *outfilename, char *tmpfile
 int parseLogFile(char *filename, char *groupBy, char *nslist, char *outfilename, char *tmpfilename) {
   FILE *infile = fopen(filename, "r");
   message msg, newmsg;
-  char *body;
+  char *body=NULL;
 
   if (!infile) {
     perror(filename);
@@ -339,6 +351,9 @@ int parseLogFile(char *filename, char *groupBy, char *nslist, char *outfilename,
 	    free(response);
 	    continuation = readonemessage(infile);
 	  }
+	  if (status) {
+	    free(status);
+	  }
 	} else {
 	  // fprintf(stderr, "Client sent the request body without waiting for a continuation response from server.\n");
 	  continuation = response; // Weird case when client doesn't receive 100-continue but continues anyway
@@ -363,6 +378,9 @@ int parseLogFile(char *filename, char *groupBy, char *nslist, char *outfilename,
 	      free(response);
 	      //	    continuation = readonemessage(infile);
 	    }
+	    if (status) {
+	      free(status);
+	    }
 	  }
 	}
 	if (continuation) {
@@ -374,6 +392,7 @@ int parseLogFile(char *filename, char *groupBy, char *nslist, char *outfilename,
 	  char *act = findheader(continuation->lines, "SOAPAction");
 	  if (act != NULL) {
 	    fprintf(stderr, "Fatal error: Expected continuation, got new SOAPAction\n");
+	    free(act);
 	    return 0;
 	  }
 	  //fprintf(stderr, "Adding lines from continuation packet\n");
@@ -388,6 +407,9 @@ int parseLogFile(char *filename, char *groupBy, char *nslist, char *outfilename,
 	} else {
 	  //fprintf(stderr, "No continuation to handle\n");
 	}
+      }
+      if (expect) {
+	free(expect);
       }
 
       body = extractbody(msg->lines);
@@ -425,7 +447,10 @@ int parseLogFile(char *filename, char *groupBy, char *nslist, char *outfilename,
       }
       
       printLogEntry(groupBy, nslist, outfilename, tmpfilename, msg->dir, msg->timestamp, SOAPAction, NULL, doc);
+
+
       //      fprintf(stderr, "Ready, cleaning up\n");
+      xmlFreeDoc(doc);
       if (SOAPAction) {
 	free(SOAPAction);
       }
@@ -467,6 +492,7 @@ int parseLogFile(char *filename, char *groupBy, char *nslist, char *outfilename,
       
       printLogEntry(groupBy, nslist, outfilename, tmpfilename, msg->dir, msg->timestamp, NULL, status, doc);
 
+      xmlFreeDoc(doc);
       if (status) {
 	free(status);
       }
@@ -526,7 +552,8 @@ int main(int argc, char *argv[]) {
       break;
     }
   }
-
+  printLogEntry(NULL, NULL, NULL, NULL, '\0', NULL, NULL, NULL, NULL);
+  
   if (outfile) {
     fclose(outfile);
   }
