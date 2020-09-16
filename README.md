@@ -12,3 +12,7 @@ tested for a single situation only, because that's where I need it.
 Oh, and it pretty much assumes that there's only a single stream of SOAP calls - it won't try to regroup anything. The log files are already
 organized by client {IP,port} anyway, so it's a pretty safe assumption for this particular case.
 
+Here's an example call, so you can see what the XPath and namespace parameters look like:
+```bash
+parseSoapLog -g "/s:Envelope/s:Body/*/ns0:request/ns3:MessageId" -n "s=http://schemas.xmlsoap.org/soap/envelope/ ns0=http://www.systemhuset.com/iec/v1 ns3=http://www.systemhuset.com/iec/data/v1" trace_20200916_192.168.4.10_12345
+```
