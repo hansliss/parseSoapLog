@@ -472,7 +472,8 @@ int main(int argc, char *argv[]) {
     return -1;
   }
 
-  for (int i=optind; i < argc; i++) {
+  int i;
+  for (i=optind; i < argc; i++) {
     if (!parseLogFile(argv[i], &log)) {
       failed=1;
       break;
