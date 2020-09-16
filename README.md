@@ -12,5 +12,3 @@ tested for a single situation only, because that's where I need it.
 Oh, and it pretty much assumes that there's only a single stream of SOAP calls - it won't try to regroup anything. The log files are already
 organized by client {IP,port} anyway, so it's a pretty safe assumption for this particular case.
 
-TODO: There's no reason to parse everything first and store it in memory, and then print it out. This will be fixed when I feel like it.
-Probably fairly soon, because this thing is much slower and more resource-hungry that it should be.

@@ -15,37 +15,6 @@
 #define MAX(a,b) (((a)<(b))?(b):(a))
 #define maybeStrdup(s) ((s)?strdup(s):NULL)
 
-typedef struct logInfo_s {
-  char *timestamp;
-  char *transactionId;
-  char direction;
-  char *operation;
-  char *status;
-  char *xml;
-  xmlDoc *doc;
-  struct logInfo_s *next;
-} *logInfo;
-
-void addlogentry(logInfo *loglist, char *timestamp, char *transactionId, char dir, char *status, char *SOAPAction, char *body) {
-  logInfo *tmp = loglist;
-  while (*tmp) {
-    tmp = &((*tmp)->next);
-  }
-  *tmp = (logInfo)malloc(sizeof(struct logInfo_s)); 
-  (*tmp)->timestamp = maybeStrdup(timestamp);
-  (*tmp)->transactionId = maybeStrdup(transactionId);
-  (*tmp)->direction = dir;
-  (*tmp)->status = maybeStrdup(status);
-  (*tmp)->operation = maybeStrdup(SOAPAction);
-  (*tmp)->xml = maybeStrdup(body);
-  if ((*tmp)->xml) {
-    if (!((*tmp)->doc = xmlParseDoc((xmlChar*)((*tmp)->xml)))) {
-      fprintf(stderr, "Parse error for timestamp %s, body [%s]\n", (*tmp)->timestamp, (*tmp)->xml);
-    }
-  }
-  (*tmp)->next = NULL;
-}
-
 typedef struct linelist_s {
   char *line;
   struct linelist_s *next;
@@ -199,10 +168,133 @@ message readonemessage(FILE *infile) {
   return tmp;
 }
 
+/**
+ * (stolen from http://xmlsoft.org/examples/xpath1.c)
+ * register_namespaces:
+ * @xpathCtx:the pointer to an XPath context.
+ * @nsList:the list of known namespaces in 
+ *"<prefix1>=<href1> <prefix2>=href2> ..." format.
+ *
+ * Registers namespaces from @nsList in @xpathCtx.
+ *
+ * Returns 0 on success and a negative value otherwise.
+ */
+int
+register_namespaces(xmlXPathContextPtr xpathCtx, const xmlChar* nsList) {
+  xmlChar* nsListDup;
+  xmlChar* prefix;
+  xmlChar* href;
+  xmlChar* next;
+
+  nsListDup = xmlStrdup(nsList);
+  if(nsListDup == NULL) {
+    fprintf(stderr, "Error: unable to strdup namespaces list\n");
+    return(-1);
+  }
+
+  next = nsListDup;
+  while(next != NULL) {
+    /* skip spaces */
+    while((*next) == ' ') next++;
+    if((*next) == '\0') break;
+
+    /* find prefix */
+    prefix = next;
+    next = (xmlChar*)xmlStrchr(next, '=');
+    if(next == NULL) {
+      fprintf(stderr,"Error: invalid namespaces list format\n");
+      xmlFree(nsListDup);
+      return(-1);
+    }
+    *(next++) = '\0';
+
+    /* find href */
+    href = next;
+    next = (xmlChar*)xmlStrchr(next, ' ');
+    if(next != NULL) {
+      *(next++) = '\0';
+    }
+
+    /* do register namespace */
+    if(xmlXPathRegisterNs(xpathCtx, prefix, href) != 0) {
+      fprintf(stderr,"Error: unable to register NS with prefix=\"%s\" and href=\"%s\"\n", prefix, href);
+      xmlFree(nsListDup);
+      return(-1);
+    }
+  }
+
+  xmlFree(nsListDup);
+  return(0);
+}
+
+void printLogEntry(char *groupBy, char *nslist, char *outfilename, char *tmpfilename, char direction, char *timestamp, char *operation, char *status, xmlDoc *doc) {
+  char *currentTransactionId = NULL;
+  static char *lastTransactionId = NULL;
+  static FILE *outfile = NULL;
+  static char filename[BUFSIZE], inbuf[BUFSIZE];
+  if (direction == '\0') {
+    if (outfile) {
+      fclose(outfile);
+    }
+    
+    if (currentTransactionId) {
+      free(currentTransactionId);
+    }
+    return;
+  } else if (direction == '>') {
+    if (doc && groupBy) {
+      xmlXPathContextPtr context = xmlXPathNewContext(doc);
+      if (nslist) {
+	register_namespaces(context, (xmlChar *)nslist);
+      }
+      xmlXPathObjectPtr result = xmlXPathEvalExpression((xmlChar *)groupBy, context);
+      
+      if (result) {
+	if(xmlXPathNodeSetIsEmpty(result->nodesetval)){
+	  xmlXPathFreeObject(result);
+	  printf("No result\n");
+	} else {
+	  xmlChar *value = xmlNodeListGetString(doc, result->nodesetval->nodeTab[0]->xmlChildrenNode, 1);
+	  currentTransactionId = strdup((char *)value);
+	  xmlFree(value);
+	}
+      }
+    }
+  }
+  if (currentTransactionId && (!lastTransactionId || strcmp(lastTransactionId, currentTransactionId))) {
+    // printf("############## New transaction %s\n", currentTransactionId);
+    lastTransactionId = currentTransactionId;
+    if (outfile) {
+      fclose(outfile);
+    }
+    snprintf(filename, sizeof(filename), "%s_%s_%s", outfilename, timestamp, currentTransactionId);
+    filename[sizeof(filename)-1] = '\0';
+    if (!(outfile=fopen(filename, "w"))) {
+      perror(filename);
+    }
+  }
+  if (outfile) {
+    fprintf(outfile, "## %s %s (%s)\n", timestamp, (direction=='>')?"request":"response", (direction=='>')?(operation):(status));
+    if (doc) {
+      xmlKeepBlanksDefault(0);
+      xmlLineNumbersDefault(1);
+      xmlThrDefIndentTreeOutput(1);
+      xmlSaveFormatFileEnc(tmpfilename, doc, "utf-8", 1);
+      FILE *tmpfile = fopen(tmpfilename, "r");
+      size_t n;
+      while ((n = fread(inbuf, 1, sizeof(inbuf), tmpfile)) != 0) {
+	fwrite(inbuf, 1, n, outfile);
+      }
+      fclose(tmpfile);
+    }
+    fprintf(outfile, "\n");
+  }
+}
+
 /*
  * Note: This is NOT the worst function I've ever written.
  */
-int parseLogFile(char *filename, logInfo *log) {
+int parseLogFile(char *filename, char *groupBy, char *nslist, char *outfilename, char *tmpfilename) {
   FILE *infile = fopen(filename, "r");
   message msg, newmsg;
   char *body;
@@ -324,7 +416,15 @@ int parseLogFile(char *filename, logInfo *log) {
       }
 
       // printf("Request: %s %s\n[%s]\n", msg->timestamp, SOAPAction, body);
-      addlogentry(log, msg->timestamp, NULL, msg->dir, NULL, SOAPAction, body);
+
+      xmlDoc *doc=NULL;
+      if (body) {
+	if (!(doc = xmlParseDoc((xmlChar*)body))) {
+	  fprintf(stderr, "Parse error for timestamp %s, body [%s]\n", msg->timestamp, body);
+	}
+      }
+      
+      printLogEntry(groupBy, nslist, outfilename, tmpfilename, msg->dir, msg->timestamp, SOAPAction, NULL, doc);
       //      fprintf(stderr, "Ready, cleaning up\n");
       if (SOAPAction) {
 	free(SOAPAction);
@@ -357,7 +457,16 @@ int parseLogFile(char *filename, logInfo *log) {
       }
 
       //printf("Response: %s status %s\n[%s]\n", msg->timestamp, status, body);
-      addlogentry(log, msg->timestamp, NULL, msg->dir, status, NULL, body);
+
+      xmlDoc *doc=NULL;
+      if (body) {
+	if (!(doc = xmlParseDoc((xmlChar*)body))) {
+	  fprintf(stderr, "Parse error for timestamp %s, body [%s]\n", msg->timestamp, body);
+	}
+      }
+      
+      printLogEntry(groupBy, nslist, outfilename, tmpfilename, msg->dir, msg->timestamp, NULL, status, doc);
+
       if (status) {
 	free(status);
       }
@@ -374,77 +483,16 @@ int parseLogFile(char *filename, logInfo *log) {
   return 1;
 }
 
-/**
- * register_namespaces:
- * @xpathCtx:the pointer to an XPath context.
- * @nsList:the list of known namespaces in 
- *"<prefix1>=<href1> <prefix2>=href2> ..." format.
- *
- * Registers namespaces from @nsList in @xpathCtx.
- *
- * Returns 0 on success and a negative value otherwise.
- */
-int
-register_namespaces(xmlXPathContextPtr xpathCtx, const xmlChar* nsList) {
-  xmlChar* nsListDup;
-  xmlChar* prefix;
-  xmlChar* href;
-  xmlChar* next;
-
-  nsListDup = xmlStrdup(nsList);
-  if(nsListDup == NULL) {
-    fprintf(stderr, "Error: unable to strdup namespaces list\n");
-    return(-1);
-  }
-
-  next = nsListDup;
-  while(next != NULL) {
-    /* skip spaces */
-    while((*next) == ' ') next++;
-    if((*next) == '\0') break;
-
-    /* find prefix */
-    prefix = next;
-    next = (xmlChar*)xmlStrchr(next, '=');
-    if(next == NULL) {
-      fprintf(stderr,"Error: invalid namespaces list format\n");
-      xmlFree(nsListDup);
-      return(-1);
-    }
-    *(next++) = '\0';
-
-    /* find href */
-    href = next;
-    next = (xmlChar*)xmlStrchr(next, ' ');
-    if(next != NULL) {
-      *(next++) = '\0';
-    }
-
-    /* do register namespace */
-    if(xmlXPathRegisterNs(xpathCtx, prefix, href) != 0) {
-      fprintf(stderr,"Error: unable to register NS with prefix=\"%s\" and href=\"%s\"\n", prefix, href);
-      xmlFree(nsListDup);
-      return(-1);
-    }
-  }
-
-  xmlFree(nsListDup);
-  return(0);
-}
-
 
 int main(int argc, char *argv[]) {
   // initialize stuff
-  static char filename[BUFSIZE], inbuf[BUFSIZE];
   LIBXML_TEST_VERSION;
-  logInfo log=NULL;
   int o;
   char *groupBy=NULL;
   char *nslist=NULL;
   char *outfilename = NULL;
   char *tmpfilename = NULL;
   FILE *outfile = stdout;
-  int failed=0;
   
   while ((o=getopt(argc, argv, "g:n:o:t:")) != -1) {
     switch (o) {
@@ -474,69 +522,8 @@ int main(int argc, char *argv[]) {
 
   int i;
   for (i=optind; i < argc; i++) {
-    if (!parseLogFile(argv[i], &log)) {
-      failed=1;
+    if (!parseLogFile(argv[i], groupBy, nslist, outfilename, tmpfilename)) {
       break;
-    }
-  }
-
-  if (!failed) {
-    logInfo tmp = log;
-    char *currentTransactionId = NULL;
-    char *lastTransactionId = NULL;
-    while (tmp) {
-      if (tmp->direction == '>') {
-	if (tmp->doc && groupBy) {
-	  xmlXPathContextPtr context = xmlXPathNewContext(tmp->doc);
-	  if (nslist) {
-	    register_namespaces(context, (xmlChar *)nslist);
-	  }
-	  xmlXPathObjectPtr result = xmlXPathEvalExpression((xmlChar *)groupBy, context);
-	  
-	  if (result) {
-	    if(xmlXPathNodeSetIsEmpty(result->nodesetval)){
-	      xmlXPathFreeObject(result);
-	      printf("No result\n");
-	    } else {
-	      xmlChar *value = xmlNodeListGetString(tmp->doc, result->nodesetval->nodeTab[0]->xmlChildrenNode, 1);
-	      tmp->transactionId = strdup((char *)value);
-	      currentTransactionId = tmp->transactionId;
-	      xmlFree(value);
-	    }
-	  }
-	}
-      } else {
-	if (currentTransactionId) {
-	  tmp->transactionId = strdup(currentTransactionId);
-	}
-      }
-      if (currentTransactionId && (!lastTransactionId || strcmp(lastTransactionId, currentTransactionId))) {
-	// printf("############## New transaction %s\n", currentTransactionId);
-	lastTransactionId = currentTransactionId;
-	if (outfile) {
-	  fclose(outfile);
-	}
-	snprintf(filename, sizeof(filename), "%s_%s_%s", outfilename, tmp->timestamp, currentTransactionId);
-	filename[sizeof(filename)-1] = '\0';
-	if (!(outfile=fopen(filename, "w"))) {
-	  perror(filename);
-	}
-      }
-      if (outfile) {
-	fprintf(outfile, "## %s %s (%s)\n", tmp->timestamp, (tmp->direction=='>')?"request":"response", (tmp->direction=='>')?(tmp->operation):(tmp->status));
-	xmlKeepBlanksDefault(0);
-	xmlLineNumbersDefault(1);
-	xmlThrDefIndentTreeOutput(1);
-	xmlSaveFormatFileEnc(tmpfilename, tmp->doc, "utf-8", 1);
-	FILE *tmpfile = fopen(tmpfilename, "r");
-	size_t n;
-	while ((n = fread(inbuf, 1, sizeof(inbuf), tmpfile)) != 0) {
-	  fwrite(inbuf, 1, n, outfile);
-	}
-	fclose(tmpfile);
-	fprintf(outfile, "\n");
-      }
-      tmp = tmp->next;
     }
   }
 
