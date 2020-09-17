@@ -298,6 +298,7 @@ void printLogEntry(char *groupBy, char *nslist, char *outfilename, char *tmpfile
 	fwrite(inbuf, 1, n, outfile);
       }
       fclose(tmpfile);
+      unlink(tmpfilename);
     }
     fprintf(outfile, "\n");
   }

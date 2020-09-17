@@ -18,5 +18,4 @@ parseSoapLog -g "/s:Envelope/s:Body/*/ns0:request/ns3:MessageId" -n "s=http://sc
 ```
 
 This will save individual "events" (grouped by the MessageId value found through XPath expression) in files prefixed by "event", using "foo" as a temp file.
-The temp file isn't removed by the program once it's done.
 
