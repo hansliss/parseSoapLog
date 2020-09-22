@@ -325,101 +325,11 @@ int parseLogFile(char *filename, char *groupBy, char *nslist, char *outfilename,
       char *SOAPAction = findheader(msg->lines, "SOAPAction");
       // fprintf(stderr, "SOAP Action: %s\n", SOAPAction);
 
-      // Check if this is supposed to be an Expect: 100-continue situation
-      char *expect = findheader(msg->lines, "Expect");
-      // Handle 100-continue
-      if (expect && !strcasecmp(expect, "100-continue")) {
-	// fprintf(stderr, "Continuation\n");
-	message response = readonemessage(infile);
-	message continuation = NULL;
-	// If the response message actually is a response from the server, check what it is
-	if (response->dir == '<') {
-	  char *status = findstatus(response->lines);
-	  if (!status) {
-	    // If this is a response from the server but it doesn't contain a status code at all, something is wrong
-	    fprintf(stderr, "Fatal error: Expect: 100-continue, but response does not contain a status code\n");
-	    return 0;
-	  } else if (strcmp(status, "100") != 0) {
-	    // If there is a status code but it's not "100", this might actually be a direct response - if so, the original
-	    // probably contained a request body. We'll just save this response until the next round.
-	    // newmsg is supposed to be NULL unless this occurs.
-	    // fprintf(stderr, "Server responded with a result, so presumably the client already sent the request\n");
-	    newmsg=response;
-	    response = NULL;
-	  } else {
-	    // If it is a "100" response, we can discard it and read a new package.
-	    freelinelist(&(response->lines));
-	    free(response);
-	    continuation = readonemessage(infile);
-	  }
-	  if (status) {
-	    free(status);
-	  }
-	} else {
-	  // fprintf(stderr, "Client sent the request body without waiting for a continuation response from server.\n");
-	  continuation = response; // Weird case when client doesn't receive 100-continue but continues anyway
-	  message response = readonemessage(infile);
-	  // If the response message actually is a response from the server, check what it is
-	  if (response->dir == '<') {
-	    char *status = findstatus(response->lines);
-	    if (!status) {
-	      // If this is a response from the server but it doesn't contain a status code at all, something is wrong
-	      fprintf(stderr, "Fatal error: Expect: 100-continue, but response does not contain a status code\n");
-	      return 0;
-	    } else if (strcmp(status, "100") != 0) {
-	      // If there is a status code but it's not "100", this might actually be a direct response - if so, the original
-	      // probably contained a request body. We'll just save this response until the next round.
-	      // newmsg is supposed to be NULL unless this occurs.
-	      // fprintf(stderr, "Server responded with a result, so presumably the client already sent the request\n");
-	      newmsg=response;
-	      response = NULL;
-	    } else {
-	      // If it is a "100" response, we can discard it and read a new package.
-	      freelinelist(&(response->lines));
-	      free(response);
-	      //	    continuation = readonemessage(infile);
-	    }
-	    if (status) {
-	      free(status);
-	    }
-	  }
-	}
-	if (continuation) {
-	  //fprintf(stderr, "Handling continuation packet\n");
-	  if (continuation->dir != '>') {
-	    fprintf(stderr, "Fatal error: No continuation after 100-continue\n");
-	    return 0;
-	  }
-	  char *act = findheader(continuation->lines, "SOAPAction");
-	  if (act != NULL) {
-	    fprintf(stderr, "Fatal error: Expected continuation, got new SOAPAction\n");
-	    free(act);
-	    return 0;
-	  }
-	  //fprintf(stderr, "Adding lines from continuation packet\n");
-	  linelist tmp=continuation->lines;
-	  addline(&(msg->lines), "");
-	  while (tmp) {	
-	    addline(&(msg->lines), tmp->line);
-	    tmp = tmp->next;
-	  }
-	  freelinelist(&(continuation->lines));
-	  free(continuation);
-	} else {
-	  //fprintf(stderr, "No continuation to handle\n");
-	}
-      }
-      if (expect) {
-	free(expect);
-      }
-
       body = extractbody(msg->lines);
 
-      // If we have already picked up a message from the server, there's no need to try to merge
-      // additional segments.
-      if (!newmsg) {
-	// fprintf(stderr, "Handling any continuation packets in the same direction\n");
-	while ((newmsg = readonemessage(infile)) != NULL && newmsg->dir == msg->dir) {
+      // fprintf(stderr, "Handling any continuation packets in the same direction\n");
+      while ((newmsg = readonemessage(infile)) != NULL) {
+	if (newmsg->dir == msg->dir) {
 	  linelist tmp = newmsg->lines;
 	  while (tmp) {
 	    if (body) {
@@ -433,10 +343,17 @@ int parseLogFile(char *filename, char *groupBy, char *nslist, char *outfilename,
 	  }
 	  freelinelist(&(newmsg->lines));
 	  free(newmsg);
+	} else {
+	  char *status = findstatus(newmsg->lines);
+	  if (status && !strcmp(status, "100")) {
+	    freelinelist(&(newmsg->lines));
+	    free(newmsg);
+	    newmsg=NULL;
+	  } else {
+	    break;
+	  }
 	}
-      } else {
-	//fprintf(stderr, "We already have a saved response message, so no merging of additional request messages\n");
-      }
+      }      
 
       // printf("Request: %s %s\n[%s]\n", msg->timestamp, SOAPAction, body);
 
