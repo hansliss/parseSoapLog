@@ -152,7 +152,7 @@ message readonemessage(FILE *infile) {
     tmp->lines=NULL;
     
     //  read header
-    if (strlen(inbuf) < 29 || strncmp(inbuf, "####", 4) != 0) {
+    if (strncmp(inbuf, "####", 4) != 0) {
       fprintf(stderr, "Expected segment header\n");
       return 0;
     } 
